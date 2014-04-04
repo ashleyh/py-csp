@@ -9,7 +9,7 @@ class chan(object):
         self.cap = cap
 
     def send(self, x):
-        return lambda: self._send(x)
+        return False, lambda: self._send(x)
 
     def _send(self, x):
         if self.cap is None or len(self.q) < self.cap:
@@ -19,7 +19,7 @@ class chan(object):
             return False, None
 
     def recv(self):
-        return lambda: self._recv()
+        return False, lambda: self._recv()
 
     def _recv(self):
         if len(self.q) > 0:
@@ -38,7 +38,13 @@ def try_send(f, x):
 
 
 def step(p):
-    it, cmd = p
+    it, (go_kludge, cmd) = p
+    if go_kludge:
+        ok, result = try_send(it, None)
+        if ok:
+            return [(it, result), (cmd, next(cmd))]
+        else:
+            return [(cmd, next(cmd))]
     ok, result = cmd()
     if not ok:
         return [p]
@@ -55,7 +61,7 @@ def flatmap(f, xs):
     return result
 
 
-def go(*fs):
+def run(*fs):
     parked = [(f, next(f)) for f in fs]
     while len(parked) > 0:
         next_parked = flatmap(step, parked)
@@ -66,10 +72,18 @@ def go(*fs):
             parked = next_parked
 
 
+def go(f):
+    return True, f
+
+
+def respond(name, reply_chan):
+    yield reply_chan.send('Hello, {}!'.format(name))
+
+
 def rpc_server(request_chan):
     while True:
         name, reply_chan = yield request_chan.recv()
-        yield reply_chan.send('Hello, {}!'.format(name))
+        yield go(respond(name, reply_chan))
 
 
 def rpc_client(request_chan, name):
@@ -82,14 +96,16 @@ def rpc_client(request_chan, name):
               'got reply:', reply)
 
 
-def main():
+def top():
     c = chan()
+    yield go(rpc_server(c))
+    yield go(rpc_client(c, 'Alice'))
+    yield go(rpc_client(c, 'Bob'))
 
-    go(
-        rpc_server(c),
-        rpc_client(c, 'Alice'),
-        rpc_client(c, 'Bob'),
-    )
+
+def main():
+    run(top())
+
 
 if __name__ == '__main__':
     main()
